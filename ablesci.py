@@ -82,7 +82,7 @@ def load_env_file():
 
     if ENV_ACCOUNTS in os.environ:
         val = os.environ[ENV_ACCOUNTS]
-        print(f"当前 {ENV_ACCOUNTS} 内容预览: {val[:100]}{'...' if len(val) > 100 else ''}")
+        print(f"当前 {ENV_ACCOUNTS} 已设置，长度: {len(val)}")
 
 load_env_file()
 
@@ -376,19 +376,21 @@ class AbleSciAuto:
 
     def run(self):
         """执行完整的登录和签到流程"""
-        if self.login():
+        if not self.login():
+            return False
+
+        self.get_user_info()
+        self.display_summary(is_before_sign=True)
+
+        sign_result = self.sign_in()
+
+        if sign_result:
+            self.log("签到完成，刷新用户信息...", "info")
+            time.sleep(2)
             self.get_user_info()
-            self.display_summary(is_before_sign=True)
-            
-            sign_result = self.sign_in()
-            
-            if sign_result:
-                self.log("签到完成，刷新用户信息...", "info")
-                time.sleep(2)
-                self.get_user_info()
-                self.display_summary(is_before_sign=False)
-        
-        return self.notifier.get_content()
+            self.display_summary(is_before_sign=False)
+
+        return sign_result
 
 def get_accounts():
     """从环境变量获取所有账号"""
@@ -396,8 +398,8 @@ def get_accounts():
     if not accounts_env:
         return []
     
-    # 调试输出
-    print(f"原始账号环境变量内容: {repr(accounts_env)}")
+    # 调试输出（隐藏敏感信息，避免日志泄露账号密码）
+    print(f"已读取账号环境变量 {ENV_ACCOUNTS}，长度: {len(accounts_env)}")
     
     accounts = []
     # 支持换行符、分号、逗号分隔
@@ -425,7 +427,7 @@ def get_accounts():
         elif "|" in account:
             email, password = account.split("|", 1)
         else:
-            print(f"警告：跳过格式错误的账号项: {account}")
+            print(f"警告：跳过格式错误的账号项（长度: {len(account)}）")
             continue
             
         email = email.strip()
@@ -433,7 +435,7 @@ def get_accounts():
         if email and password:
             valid_accounts.append((email, password))
         else:
-            print(f"警告：账号或密码为空: {email}:{password}")
+            print(f"警告：账号或密码为空: {protect_privacy(email)}")
     
     return valid_accounts
 
@@ -451,16 +453,19 @@ def main():
         global_notifier.log(f"请设置环境变量 {ENV_ACCOUNTS}，格式为：邮箱1:密码1[换行]邮箱2:密码2", "warning")
         if global_notifier.notify_enabled:
             global_notifier.send_notification()
-        return
-    
+        sys.exit(1)
+
     global_notifier.log(f"找到 {account_count} 个账号", "info")
-    
+
+    all_success = True
+
     for i, (email, password) in enumerate(accounts, 1):
         global_notifier.log(f"\n===== 开始处理第 {i}/{account_count} 个账号 =====", "info")
         
         automator = AbleSciAuto(email, password, notifier=global_notifier)
-        automator.run()
-        
+        if not automator.run():
+            all_success = False
+
         global_notifier.log(f"===== 完成第 {i}/{account_count} 个账号处理 =====", "info")
     
     global_notifier.log("\n===== 所有账号处理完成 =====", "info")
@@ -469,7 +474,15 @@ def main():
         global_notifier.send_notification()
     
     if os.getenv("GITHUB_ACTIONS") == "true":
-        print(f"::set-output name=log_content::{global_notifier.get_content()}")
+        output_path = os.getenv("GITHUB_OUTPUT")
+        if output_path:
+            with open(output_path, "a", encoding="utf-8") as f:
+                f.write("log_content<<EOF\n")
+                f.write(global_notifier.get_content())
+                f.write("\nEOF\n")
+
+    if not all_success:
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
